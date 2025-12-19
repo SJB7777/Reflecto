@@ -1,0 +1,21 @@
+[project]
+name = "reflecto"
+version = "0.1.0"
+description = "AI-powered XRR Analysis Library"
+dependencies = [
+    "numpy",
+    "torch",
+    "genx3",
+    "matplotlib",
+    "tqdm>=4.67.1",
+    "bumps>=1.0.3",
+    "pandas>=2.3.3",
+]
+
+[tool.setuptools.package-data]
+reflecto = ["assets/*.pt", "assets/*.json"]
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true

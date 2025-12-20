@@ -52,3 +52,37 @@ def calc_theoretical_sld(density: float, total_z: int, molar_mass: float) -> Tup
     sld_val = r_e * rho_e * 1e6
     
     return sld_val, rho_e
+
+def sld_to_material_properties(sld: float, total_z: float, molar_mass: float) -> Tuple[float, float]:
+    """
+    Convert fitted SLD to Physical Densities using Chemical Information (Form Factor).
+    
+    Physics:
+        SLD = r_e * (rho_mass * N_A / M) * f_1
+        (Assuming f_1 approx Z for standard XRR)
+    
+    Args:
+        sld (float): SLD value in x10^-6 A^-2
+        total_z (float): Total Form Factor (Total Z of the molecule)
+        molar_mass (float): Molar Mass (g/mol)
+
+    Returns:
+        Tuple[float, float]: (Electron Density [e/A^3], Mass Density [g/cm^3])
+    """
+    # 1. Calculate Number Density of Molecules (rho_n)
+    # SLD (10^-6 A^-2) -> Convert to A^-2: sld * 1e-6
+    # rho_n [molecules/A^3] = SLD_raw / (r_e * total_z)
+    sld_raw = sld * 1e-6
+    rho_n = sld_raw / (r_e * total_z)
+
+    # 2. Calculate Electron Density [e/A^3]
+    # rho_e = rho_n * total_z
+    rho_e = rho_n * total_z
+
+    # 3. Calculate Mass Density [g/cm^3]
+    # rho_mass = (rho_n * M) / N_A
+    # Convert N_A from mol^-1 to generic scale matching units?
+    # actually: rho_mass [g/cm^3] = rho_n [A^-3] * M [g/mol] / N_A * 1e24 [A^3/cm^3]
+    rho_mass = (rho_n * molar_mass / const.Avogadro) * 1e24
+
+    return rho_e, rho_mass

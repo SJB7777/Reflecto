@@ -7,6 +7,7 @@ def read_dat(file: str | Path) -> pd.DataFrame:
         file, 
         header=None,
         names=['tth', 'intensity'],
-        sep='\\s+'
+        sep='\\s+',
+        comment='#'
     )
     return df

@@ -1,97 +1,79 @@
+import numpy as np
 import torch
 import torch.nn as nn
 
 
-class XRR1DRegressor(nn.Module):
-    def __init__(self, q_len: int, input_channels: int = 2, output_dim: int = 3, n_channels: int = 64, depth: int = 4,
-        mlp_hidden: int = 256, dropout: float = 0.1):
-        """
-        XRR 1D CNN Regressor
-
-        Args:
-            q_len: Length of input q grid (n_points). Used for config logging.
-            input_channels: Number of input channels (Default 2: [Reflectivity, Mask]).
-            output_dim: Number of parameters to predict (Default 6: [d, sigma, sld, sio2_d, sio2_sigma, sio2_sld]).
-            n_channels: Number of output channels for the first CNN layer.
-            depth: Depth of the CNN encoder (number of conv blocks).
-            mlp_hidden: Hidden size of the MLP regressor.
-            dropout: Dropout probability.
-        """
+class FourierFeatureMapping(nn.Module):
+    """
+    Random Fourier Features:
+    좌표(q)를 고차원 주파수 공간으로 매핑하여 고주파(High-Frequency) 패턴 학습을 돕습니다.
+    """
+    def __init__(self, input_dim=1, mapping_size=64, scale=10.0):
         super().__init__()
+        self.mapping_size = mapping_size
+        self.register_buffer('B', torch.randn(input_dim, mapping_size) * scale)
+
+    def forward(self, x):
+        if x.dim() == 2:
+            x = x.unsqueeze(1)
+        x_proj = x.transpose(1, 2) @ self.B
+        x_proj = x_proj.transpose(1, 2) * 2 * np.pi
+        return torch.cat([torch.sin(x_proj), torch.cos(x_proj)], dim=1)
+
+class XRRPhysicsModel(nn.Module):
+    def __init__(self, q_len: int, input_channels: int = 2, output_dim: int = 3,
+                n_channels: int = 64, depth: int = 5, mlp_hidden: int = 256,
+                dropout: float = 0.1, use_fourier: bool = True, fourier_scale: float = 10.0):
+        super().__init__()
+        self.use_fourier = use_fourier
+
+        # Checkpoint 호환성을 위한 Config 저장
         self.config = {
-            'q_len': q_len,
-            'input_channels': input_channels,
-            'output_dim': output_dim,
-            'n_channels': n_channels,
-            'depth': depth,
-            'mlp_hidden': mlp_hidden,
-            'dropout': dropout,
+            'q_len': q_len, 'input_channels': input_channels, 'output_dim': output_dim,
+            'n_channels': n_channels, 'depth': depth, 'mlp_hidden': mlp_hidden,
+            'dropout': dropout, 'use_fourier': use_fourier, 'fourier_scale': fourier_scale
         }
 
-        # ---------------------------------------------------------
-        # 1D CNN Encoder
-        # ---------------------------------------------------------
-        layers = []
-        in_ch = input_channels
+        self.fourier = FourierFeatureMapping(input_dim=1, mapping_size=32, scale=fourier_scale)
+        enc_in_channels = input_channels + (32 * 2) if use_fourier else input_channels
+        self.register_buffer('q_grid', torch.linspace(0, 1, q_len).view(1, 1, -1))
 
+        layers = []
+        curr_dim = enc_in_channels
         for i in range(depth):
-            out_ch = n_channels * (2 ** min(i, 3))
-            layers.extend([
-                nn.Conv1d(in_ch, out_ch, kernel_size=7, padding=3, bias=False),
-                nn.BatchNorm1d(out_ch),
-                nn.ReLU(inplace=True),
+            out_dim = n_channels * (2 ** min(i, 3))
+            layers.append(nn.Sequential(
+                nn.Conv1d(curr_dim, out_dim, kernel_size=7, padding=3, bias=False),
+                nn.BatchNorm1d(out_dim),
+                nn.LeakyReLU(0.2, inplace=True),
                 nn.Dropout1d(dropout),
                 nn.MaxPool1d(kernel_size=2)
-            ])
-            in_ch = out_ch
+            ))
+            curr_dim = out_dim
 
         self.encoder = nn.Sequential(*layers)
-
-        # Global Average Pooling: (B, C, L) -> (B, C, 1)
-        # Summarizes features across the entire q-range
         self.global_pool = nn.AdaptiveAvgPool1d(1)
-
-        # ---------------------------------------------------------
-        # MLP Regressor
-        # ---------------------------------------------------------
-        encoder_out_dim = in_ch  # The channel count of the last conv layer
         self.regressor = nn.Sequential(
-            nn.Linear(encoder_out_dim, mlp_hidden),
-            nn.ReLU(inplace=True),
+            nn.Linear(curr_dim, mlp_hidden),
+            nn.LeakyReLU(0.2, inplace=True),
             nn.Dropout(dropout),
             nn.Linear(mlp_hidden, mlp_hidden // 2),
-            nn.ReLU(inplace=True),
-            nn.Linear(mlp_hidden // 2, output_dim)  # 출력: Thickness, Roughness, SLD
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Linear(mlp_hidden // 2, output_dim)
         )
-
         self._init_weights()
 
     def _init_weights(self):
-        """Initialize weights using He (Kaiming) Normal initialization."""
         for m in self.modules():
-            if isinstance(m, nn.Conv1d) or isinstance(m, nn.Linear):
-                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
-                if m.bias is not None:
-                    nn.init.zeros_(m.bias)
-            elif isinstance(m, nn.BatchNorm1d):
-                nn.init.ones_(m.weight)
-                nn.init.zeros_(m.bias)
+            if isinstance(m, (nn.Conv1d, nn.Linear)):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='leaky_relu')
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            x: Input tensor of shape (Batch, input_channels, q_len).
-                - Channel 0: Log-normalized Reflectivity
-                - Channel 1: Mask (1 for valid data, 0 for padding)
-
-        Returns:
-            Predicted normalized parameters of shape (Batch, output_dim).
-        """
-        # 1. Extract Features
-        features = self.encoder(x)  # Output: (B, Last_Ch, Reduced_Len)
-
-        # 2. Global Pooling
-        pooled = self.global_pool(features).squeeze(-1)  # Output: (B, Last_Ch)
-
-        # 3. Regression
-        return self.regressor(pooled)
+    def forward(self, x):
+        bs = x.shape[0]
+        if self.use_fourier:
+            q_batch = self.q_grid.expand(bs, -1, -1)
+            q_fourier = self.fourier(q_batch)
+            x = torch.cat([x, q_fourier], dim=1)
+        feat = self.encoder(x)
+        feat = self.global_pool(feat).squeeze(-1)
+        return self.regressor(feat)

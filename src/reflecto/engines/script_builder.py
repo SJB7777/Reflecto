@@ -17,7 +17,7 @@ class Sim_Vars:
         self.f_d   = {init_params['f_d']}
         self.f_sig = {init_params['f_sig']}
         self.f_sld = {init_params['f_sld']}
-        
+
         # SiO2 (Fixed/Guess)
         self.s_d   = 15.0
         self.s_sig = 3.0
@@ -27,6 +27,7 @@ class Sim_Vars:
         self.i0    = 1.0
         self.s_len = {init_params['s_len']}
         self.beam_w = {init_params['beam_w']}
+        self.ibkg = 1e-7
 
     # =================================================================
     # [FIX] GenX requires BOTH Setters AND Getters for every parameter
@@ -62,6 +63,9 @@ class Sim_Vars:
     def set_beam_w(self, v): self.beam_w = float(v)
     def get_beam_w(self): return self.beam_w
 
+    def set_ibkg(self, v): self.ibkg = float(v)
+    def get_ibkg(self): return self.ibkg
+
 v = Sim_Vars()
 
 # Layer Definitions
@@ -75,7 +79,7 @@ sample = Sample(Stacks=[Stack(Layers=[Film, SiO2])], Ambient=Amb, Substrate=Sub)
 # Instrument Definitions
 inst = Instrument(
     probe=Probe.xray, wavelength=1.54, coords=Coords.q,
-    I0=v.i0, Ibkg=1e-10, res=0.002,
+    I0=v.i0, Ibkg=v.ibkg, res=0.002,
     restype=ResType.fast_conv,
     footype=FootType.gauss,
     samplelen=v.s_len,

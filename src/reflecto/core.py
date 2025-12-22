@@ -32,16 +32,16 @@ def analyze(
     # 1. AI 추론 (Prediction)
     if verbose:
         print("Running AI Inference...")
-    d, sig, sld = engine.predict(q, R)
+    ai_film = engine.predict(q, R)
+    ai_params_obj = [ai_film]
 
-    ai_params_obj = [ParamSet(d, sig, sld)]
     ai_curve = param2refl(q, ai_params_obj, sio2_param=None)
 
     result = {
         "prediction": {
-            "thickness": float(d),
-            "roughness": float(sig),
-            "sld": float(sld)
+            "thickness": ai_film.thickness,
+            "roughness": ai_film.roughness,
+            "sld": ai_film.sld
         },
         "ai_curve": ai_curve,
     }
@@ -49,8 +49,7 @@ def analyze(
     if fit:
         if verbose:
             print("Refining with GenX...")
-        initial_params = ParamSet(d, sig, sld)
-        fitter = GenXFitter(q, R, initial_params)
+        fitter = GenXFitter(q, R, ai_film)
         fit_res = fitter.run(verbose=verbose)
         
         result["fit_params"] = fit_res

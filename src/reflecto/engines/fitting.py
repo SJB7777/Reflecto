@@ -1,76 +1,54 @@
-from dataclasses import dataclass
-
-import matplotlib.pyplot as plt
 import numpy as np
+import time
+from dataclasses import dataclass
 from genx import fom_funcs
 from genx.data import DataList, DataSet
 from genx.model import Model
 from genx.parameters import Parameters
-
-from reflecto.simulate.simulate import ParamSet
 from .script_builder import GenXScriptBuilder
 
 @dataclass
 class XRRConfig:
-    """XRR 분석을 위한 범용 하이퍼파라미터 설정"""
-    
-    # 1. 기기 기본값
-    wavelength: float = 1.54
+    """XRR 분석을 위한 물리학적 범용 하이퍼파라미터 설정"""
+    wavelength: float = 1.5406
     beam_width: float = 0.1
-    sample_len_init: float = 10.0
+    sample_len_init: float = 15.0
     
-    # 2. 범용 탐색 범위 (Universal Bounds)
-    # 어떤 물질이 들어와도 커버 가능한 물리적 한계치 설정
-    
-    # [두께] AI 예측값 대비 비율 (예: 0.2배 ~ 5.0배까지 탐색)
-    thickness_search_ratio: tuple[float, float] = (0.2, 5.0)
-    
-    # [SLD] 절대 범위 (단위: x10^-6 A^-2)
-    # 0 (진공) ~ 150 (금/백금 등 고밀도 금속)
-    sld_absolute_bounds: tuple[float, float] = (5.0, 150.0)
-    
-    # [거칠기] 절대 범위 (Angstrom)
-    # 0 (완벽한 표면) ~ 50 (매우 거친 표면)
-    roughness_absolute_bounds: tuple[float, float] = (0.0, 50.0)
-    
-    # 3. 최적화 강도 (범위가 넓어진 만큼 steps를 조금 늘리는 게 안전함)
-    steps_instrument: int = 200
-    steps_structure: int = 800  # 넓은 범위를 찾기 위해 증가
-    steps_fine: int = 1000
-    pop_size: int = 30          # 개체군 크기 증가
-
+    # Optimizer 설정
+    steps_instrument: int = 300
+    steps_thickness: int = 800 
+    steps_structure: int = 1000
+    steps_fine: int = 1200
+    pop_size: int = 40
 
 class GenXFitter:
     def __init__(self, q: np.ndarray, R: np.ndarray, nn_params, config: XRRConfig = None):
         self.q = q
-        self.R = R / R.max()
+        max_r = np.nanmax(R) if np.nanmax(R) > 0 else 1.0
+        self.R = np.nan_to_num(R / max_r, nan=1e-12, posinf=1e-12)
         self.nn_params = nn_params
         self.config = config if config else XRRConfig()
-        
         self.model = self._initialize_genx_model()
         self.pars_map = {}
 
     def _initialize_genx_model(self) -> Model:
-        ds = DataSet(name="XRR_Data")
+        ds = DataSet(name="Reflecto_Ultimate_Fitter")
         ds.x_raw, ds.y_raw = self.q, self.R
         ds.error_raw = np.maximum(self.R * 0.1, 1e-9)
         ds.run_command()
-
+        
         model = Model()
         model.data = DataList([ds])
-        
-        # 초기값 설정 (AI 예측값 사용)
-        # 단, 초기값이 너무 터무니없으면 안전한 값(Safe Default)으로 보정
-        ai_sld = float(self.nn_params.sld)
-        
+
         init_vals = {
             'f_d': float(self.nn_params.thickness),
-            'f_sig': float(self.nn_params.roughness),
-            'f_sld': ai_sld, 
+            'f_sig': 3.0,
+            'f_sld': float(self.nn_params.sld),
             's_len': self.config.sample_len_init,
-            'beam_w': self.config.beam_width
+            'beam_w': self.config.beam_width,
+            'i0': 1.0,
+            'ibkg': 1e-7
         }
-        
         builder = GenXScriptBuilder()
         model.set_script(builder.build(init_vals))
         model.compile_script()
@@ -78,112 +56,99 @@ class GenXFitter:
 
     def _setup_parameters(self):
         pars = Parameters()
-        model = self.model
-        cfg = self.config
-        
-        # AI 예측값 가져오기
-        guess_d = float(self.nn_params.thickness)
-        
-        # 헬퍼 함수
-        def add_par(name, val=None, min_v=None, max_v=None, fit=False):
+        model, cfg = self.model, self.config
+        d_ai = float(self.nn_params.thickness)
+        sld_ai = float(self.nn_params.sld)
+
+        def add_par(name, val, min_v, max_v, fit=True):
             p = pars.append(name, model)
-            if val is not None: p.value = val
-            if min_v is not None: p.min = min_v
-            if max_v is not None: p.max = max_v
+            p.min, p.max = min_v, max_v
+            p.value = np.clip(val, min_v, max_v)
             p.fit = fit
-            # 키 이름 통일 (set_ 제거) -> main.py와의 호환성 유지
             clean_name = name.replace("v.set_", "set_").replace("v.", "")
-            self.pars_map[clean_name] = p 
+            self.pars_map[clean_name] = p
             return p
 
-        # ==========================================================
-        # 1. Film Layer (범용 설정 적용)
-        # ==========================================================
-        # 두께: AI 예측값 기준 비율 범위 (예: 0.2 ~ 5.0배)
-        add_par("v.set_f_d", 
-                min_v=max(5.0, guess_d * cfg.thickness_search_ratio[0]), 
-                max_v=guess_d * cfg.thickness_search_ratio[1])
-        
-        # 거칠기: 범용 절대 범위 (0 ~ 50 A)
-        add_par("v.set_f_sig", 
-                min_v=cfg.roughness_absolute_bounds[0], 
-                max_v=cfg.roughness_absolute_bounds[1])
-        
-        # SLD: 범용 절대 범위 (5 ~ 150) -> 물질 몰라도 다 커버됨
-        add_par("v.set_f_sld", 
-                min_v=cfg.sld_absolute_bounds[0], 
-                max_v=cfg.sld_absolute_bounds[1])
+        # [1] Main Film
+        add_par("v.set_f_d", d_ai, max(10.0, d_ai-150.0), d_ai+150.0)
+        add_par("v.set_f_sig", 3.0, 0.0, 20.0)
+        add_par("v.set_f_sld", sld_ai, max(5.0, sld_ai-15.0), min(150.0, sld_ai+15.0))
 
-        # ==========================================================
-        # 2. SiO2 & Substrate (일반적인 Si 웨이퍼 가정)
-        # ==========================================================
-        # 사용자가 "기판이 Si가 아니다"라고 하지 않는 이상 Si 산화막 범위 사용
-        add_par("v.set_s_d",   val=15.0, min_v=5.0, max_v=60.0)
-        add_par("v.set_s_sig", val=3.0,  min_v=1.0, max_v=15.0)
-        add_par("v.set_s_sld", val=18.8, min_v=10.0, max_v=25.0) 
+        # [2] Substrate Oxide (SiO2) - 로깅 대상
+        add_par("v.set_s_d",   15.0, 5.0, 50.0) 
+        add_par("v.set_s_sig", 3.0,  0.5, 12.0)
+        add_par("v.set_s_sld", 18.8, 16.5, 21.0) 
 
-        # ==========================================================
-        # 3. Instrument
-        # ==========================================================
-        add_par("v.set_i0",    val=1.0, min_v=0.1, max_v=10.0) # 스케일이 크게 틀려도 잡게 해줌
-        add_par("v.set_s_len", val=cfg.sample_len_init, min_v=2.0, max_v=100.0)
-        add_par("v.set_beam_w", val=cfg.beam_width, fit=False)
+        # [3] Instrument
+        add_par("v.set_i0", 1.0, 0.5, 2.5)
+        add_par("v.set_ibkg", 1e-7, 1e-10, 1e-4)
+        add_par("v.set_s_len", cfg.sample_len_init, 10.0, 45.0) 
 
         model.parameters = pars
 
-    def _set_active_params(self, active_names: list[str]):
-        """입력된 이름(clean name)에 해당하는 파라미터만 fit=True로 설정"""
-        # 전체 끄기
-        for p in self.model.parameters:
-            p.fit = False
-            
-        # 켜기
-        for name in active_names:
-            # v.set_f_d -> set_f_d 변환 처리
-            clean = name.replace("v.set_", "set_").replace("v.", "")
-            if clean in self.pars_map:
-                self.pars_map[clean].fit = True
-            else:
-                print(f"[Warning] Parameter '{name}' (clean: '{clean}') not found in map.")
-
     def run(self, verbose=True):
         self._setup_parameters()
-        model = self.model
-        cfg = self.config
+        model, cfg = self.model, self.config
+        if verbose: self._print_header()
 
-        # Step 1: Instrument (Linear)
-        if verbose: print("\n[GenX] Step 1: Fitting Instrument (Wide)...")
-        model.set_fom_func(fom_funcs.diff)
-        self._set_active_params(["set_i0", "set_s_len"])
-        res1 = model.bumps_fit(method="de", steps=cfg.steps_instrument, pop=10, tol=0.01)
-        model.bumps_update_parameters(res1)
+        # Step 1: BASELINE
+        start = time.time()
+        model.set_fom_func(fom_funcs.logR1) 
+        self._set_active_params(["set_i0", "set_s_len", "set_ibkg"])
+        model.bumps_update_parameters(model.bumps_fit(method="de", steps=cfg.steps_instrument, pop=15))
+        if verbose: self._print_status("BASELINE", time.time() - start)
 
-        # Step 2: Structure (Log) - 여기가 가장 중요함
-        if verbose: print("[GenX] Step 2: Global Search for Structure (Log)...")
-        model.set_fom_func(fom_funcs.log)
-        
-        # 핵심: 두께, SLD, 기판 두께를 동시에 넓은 범위에서 탐색
-        self._set_active_params(["set_f_d", "set_f_sld", "set_s_d"])
-        
-        res2 = model.bumps_fit(method="de", steps=cfg.steps_structure, pop=25, tol=0.005)
-        model.bumps_update_parameters(res2)
+        # Step 2: THICKNESS
+        start = time.time()
+        self._set_active_params(["set_f_d", "set_ibkg"]) 
+        model.bumps_update_parameters(model.bumps_fit(method="de", steps=cfg.steps_thickness, pop=cfg.pop_size))
+        if verbose: self._print_status("THICKNESS", time.time() - start)
 
-        # Step 3: Fine Tuning
-        if verbose: print("[GenX] Step 3: Fine Tuning All Params...")
-        self._set_active_params([
-            "set_f_d", "set_f_sld", "set_f_sig",
-            "set_s_d", "set_s_sld", "set_s_sig",
-            "set_i0"
-        ])
-        
-        res3 = model.bumps_fit(method="de", steps=cfg.steps_fine, pop=25, tol=0.001)
-        model.bumps_update_parameters(res3)
+        # Step 3: STRUCTURE
+        start = time.time()
+        self.pars_map['set_f_sld'].min, self.pars_map['set_f_sld'].max = 5.0, 150.0
+        self._set_active_params(["set_f_d", "set_f_sld", "set_f_sig", "set_s_d"])
+        model.bumps_update_parameters(model.bumps_fit(method="de", steps=cfg.steps_structure, pop=cfg.pop_size))
+        if verbose: self._print_status("STRUCTURE", time.time() - start)
 
-        model.evaluate_sim_func()
+        # Step 4: FINAL
+        start = time.time()
+        self._set_active_params(["set_f_d", "set_f_sld", "set_f_sig", "set_s_d", "set_s_sld", "set_s_sig", "set_i0", "set_ibkg", "set_s_len"])
+        model.bumps_update_parameters(model.bumps_fit(method="de", steps=cfg.steps_fine, pop=cfg.pop_size))
+        if verbose: 
+            self._print_status("FINAL", time.time() - start)
+            print("="*180 + "\n")
+
         return self._collect_results()
 
+    def _set_active_params(self, active_names: list[str]):
+        for p in self.model.parameters: p.fit = False
+        for name in active_names:
+            if name in self.pars_map: self.pars_map[name].fit = True
+
+    def _print_header(self):
+        # SiO2 컬럼 추가로 인한 헤더 확장
+        print("\n" + "="*180)
+        print(f"{'Fitting Step':^15} | {'FOM (logR1)':^20} | {'Thick':^7} | {'Rough':^5} | {'SLD':^5} | {'SiO2_d':^6} | {'SiO2_s':^6} | {'SiO2_sld':^8} | {'I0':^5} | {'L':^4} | {'Bkg':^5} | {'Time':^7}")
+        print("-" * 180)
+
+    def _print_status(self, step_name: str, elapsed: float):
+        self.model.evaluate_sim_func()
+        p = self.pars_map
+        fom_val = self.model.fom
+        log_fom = np.log10(fom_val) if fom_val > 0 else -np.inf
+        b_val = np.log10(max(1e-12, p['set_ibkg'].value))
+        
+        fom_str = f"{fom_val:.4e} ({log_fom:5.2f})"
+        
+        # Film & SiO2 & Instrument 통합 로깅
+        print(f"   >> [{step_name:^12}] {fom_str:^20} | "
+              f"{p['set_f_d'].value:7.2f} | {p['set_f_sig'].value:5.2f} | {p['set_f_sld'].value:5.2f} | "
+              f"{p['set_s_d'].value:6.2f} | {p['set_s_sig'].value:6.2f} | {p['set_s_sld'].value:8.2f} | "
+              f"{p['set_i0'].value:5.2f} | {p['set_s_len'].value:4.1f} | {b_val:.1f} | {elapsed:6.2f}s")
+
     def _collect_results(self) -> dict:
+        self.model.evaluate_sim_func()
         results = {name: p.value for name, p in self.pars_map.items()}
-        results['R_sim'] = self.model.data[0].y_sim
-        results['fom'] = self.model.fom
+        results.update({'R_sim': self.model.data[0].y_sim, 'fom': self.model.fom})
         return results

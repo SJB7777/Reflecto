@@ -1,41 +1,57 @@
 {
-    "exp_name": "power1_tune",
-    "base_dir": "D:\\03_Resources\\Data\\XRR_AI\\data\\one_layer",
+    "exp_name": "cubic",
+    "base_dir": "D:\\Members\\IsaacYong\\Data\\XRR_AI\\exp07",
     "param_ranges": {
-        "thickness": null,
-        "roughness": null,
-        "sld": null,
-        "sio2_thickness": null,
-        "sio2_roughness": null,
-        "sio2_sld": null
+        "thickness": [
+            10.0,
+            1200.0
+        ],
+        "roughness": [
+            0.0,
+            15.0
+        ],
+        "sld": [
+            5.0,
+            100.0
+        ],
+        "sio2_thickness": [
+            10.0,
+            30.0
+        ],
+        "sio2_roughness": [
+            1.0,
+            5.0
+        ],
+        "sio2_sld": 18.8
     },
     "simulation": {
         "wavelength": 1.54,
-        "n_samples": 1000000,
-        "q_points": 1000,
-        "q_min": 0.007120925792496737,
-        "q_max": 1.0650912378689954,
-        "power": 1
+        "n_samples": 50000,
+        "q_points": 2000,
+        "q_min": 0.0035604632351793394,
+        "q_max": 1.0650912378689954
     },
     "model": {
-        "n_channels": 32,
-        "depth": 5,
-        "mlp_hidden": 256,
-        "dropout": 0.02507346016270837
+        "use_fourier": true,
+        "fourier_scale": 15.0,
+        "n_channels": 64,
+        "depth": 6,
+        "mlp_hidden": 512,
+        "dropout": 0.1
     },
     "training": {
-        "batch_size": 32,
-        "epochs": 150,
-        "lr": 0.0006119557822568638,
-        "weight_decay": 0.0005310131070268705,
-        "val_ratio": 0.2,
+        "batch_size": 64,
+        "epochs": 100,
+        "lr": 0.0002,
+        "weight_decay": 0.0001,
+        "val_ratio": 0.1,
         "test_ratio": 0.1,
-        "patience": 15,
-        "num_workers": 0,
+        "patience": 20,
+        "num_workers": 4,
         "augment": true,
-        "aug_prob": 0.5,
-        "q_shift_sigma": 0.002,
-        "intensity_scale": 0.15,
-        "expand_factor": 10
+        "expand_factor": 50,
+        "aug_prob": 0.9,
+        "intensity_scale": 0.25,
+        "q_shift_sigma": 0.004
     }
 }

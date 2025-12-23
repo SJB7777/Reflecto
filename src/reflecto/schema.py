@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
 
@@ -40,3 +41,8 @@ class FitParam:
     max: float
     active: bool = True
 
+@dataclass
+class FitTarget:
+    obj: Any
+    attr_name: str
+    spec: FitParam

@@ -24,7 +24,7 @@ def main():
 
     # [Step 1] 데이터 로드
     data_dir = Path("test_data") / "In2O3_Ar_30nm"
-    file_path = data_dir / "#1_xrr.dat"
+    file_path = data_dir / "#2_xrr.dat"
     
     if not file_path.exists():
         print(f"❌ Error: File not found at {file_path}")

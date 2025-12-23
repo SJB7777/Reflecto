@@ -8,7 +8,7 @@ from genx.models.spec_nx import Layer, Sample, Specular, Stack
 from tqdm import tqdm
 
 from ..utils.consts_genx import AIR, SURFACE_SIO2, XRAY_TUBE
-from ..utils.physics import r_e
+from ..utils.physics_utils import r_e
 from ..simulate.noise import add_noise
 
 

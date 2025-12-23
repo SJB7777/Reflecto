@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt
 import numpy as np
 
-from .utils.physics import sld_to_density
+from .utils.physics_utils import sld_to_density
 
 
 def plot_analysis_result(q: np.ndarray, R_measured: np.ndarray, result: dict, title: str = "XRR Analysis"):

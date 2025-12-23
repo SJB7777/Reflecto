@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import reflecto 
-from reflecto.utils.physics import calc_theoretical_sld, tth2q, sld_to_material_properties
+from reflecto.utils.physics_utils import calc_theoretical_sld, tth2q, sld_to_material_properties
 from reflecto.simulate.simulate import ParamSet
 from reflecto.simulate.profile import calc_profile
 from reflecto.visualize import plot_profile

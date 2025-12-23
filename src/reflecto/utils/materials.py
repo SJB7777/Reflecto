@@ -1,5 +1,5 @@
 import numpy as np
-from .physics import r_e 
+from .physics_utils import r_e 
 
 MATERIAL_DB = {
     "Si":   {"rho": 2.33,  "Z": 14, "M": 28.0855},
